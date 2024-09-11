@@ -1,0 +1,101 @@
+pipeline {
+    agent any
+    tools {
+        jdk 'jdk17'
+        nodejs 'node16'
+    }
+    environment {
+        SCANNER_HOME = tool 'sonar-scanner' // Points to the configured SonarQube scanner tool
+        SONAR_TOKEN = 'sqp_43f47efa8cf2195df972883b66970c6d7b5838b8'
+    }
+
+    stages {
+        stage('Clean Workspace') {
+            steps {
+                cleanWs()
+            }
+        }
+
+        stage('Checkout Code') {
+            steps {
+                git branch: 'main', url: 'https://github.com/obaid0555/terraform-Jenkins-Pipeline.git'
+            }
+        }
+
+        stage('SonarQube Analysis') {
+            steps {
+                script {
+                    withSonarQubeEnv('sonar-server') {
+                        sh '''
+                        $SCANNER_HOME/bin/sonar-scanner \
+                        -Dsonar.projectKey=amazon \
+                        -Dsonar.sources=. \
+                        -Dsonar.login=$SONAR_TOKEN
+                        '''
+                    }
+                }
+            }
+        } 
+        
+        stage('Quality Gate') {
+            steps {
+                script {
+                    waitForQualityGate abortPipeline: true
+                }
+            }
+        }
+
+        stage('NPM Install') {
+            steps {
+                script {
+                    sh 'npm install'
+                }
+            }
+        }
+
+        stage('OWASP FS Scan') {
+            steps {
+                script {
+                    // Run OWASP Dependency Check with additional arguments
+                    dependencyCheck additionalArguments: '--scan ./ --disableYarnAudit --disableNodeAudit', odcInstallation: 'DP'
+                    
+                    // Publish the Dependency Check report
+                    dependencyCheckPublisher pattern: '**/dependency-check-report.xml'
+                }
+            }
+        }
+
+        stage('TRIVY FS') {
+            steps {
+                sh 'trivy fs . > TRIVYFS.txt'
+            }
+        }
+
+        stage('DB & DP') {
+            steps {
+                script {
+                    withDockerRegistry(credentialsId: 'docker', toolName: 'docker') {
+                        sh '''
+                        docker build -t amazon .
+                        docker tag amazon obaid0555/amazon:latest
+                        docker push obaid0555/amazon:latest
+                        '''
+                    }
+                }
+            }
+        }
+
+        stage('TRIVY IMAGE') {
+            steps {
+                sh 'trivy image obaid0555/amazon:latest > TRIVYFSIMAGE.txt'
+            }
+        }
+
+        stage('AMAZON APP') {
+            steps {
+                sh 'docker run -d --name amazon -p 3000:3000 obaid0555/amazon:latest'
+            }
+        }
+    }
+}
+
